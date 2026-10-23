@@ -1,0 +1,95 @@
+---
+title: "2026 Florida Republican Primary for Governor"
+format: html
+execute:
+  echo: false
+  message: false
+  warning: false
+---
+
+```{r}
+library(tidyverse)
+library(scales)
+library(sf)
+library(tigris)
+library(plotly)
+
+options(tigris_use_cache = TRUE)
+
+# List all county precinct files inside the zip archive
+files <- unzip("2026-pri-outputofficial.zip", list = TRUE)$Name
+
+# Read and combine all county files
+election_data <- map(
+  files,
+  \(f) read_tsv(
+    unz("2026-pri-outputofficial.zip", f),
+    col_names = FALSE,
+    col_types = cols(.default = "c"),
+    quote = ""
+  )
+) |>
+  list_rbind()
+
+# Summarize votes for candidates in the Republican primary for Governor
+gov_rep <- election_data |>
+  filter(X12 == "Governor", X16 == "REP") |>
+  mutate(votes = as.numeric(X19)) |>
+  summarize(total_votes = sum(votes, na.rm = TRUE), .by = X15) |>
+  rename(candidate = X15)
+```
+
+```{r}
+bar_plot <- gov_rep |>
+  mutate(
+    vote_share = total_votes / sum(total_votes),
+    candidate = fct_reorder(candidate, total_votes),
+    hover_text = paste0(
+      "Candidate: ", candidate, "<br>",
+      "Total Votes: ", label_comma()(total_votes), "<br>",
+      "Vote Share: ", label_percent(accuracy = 0.1)(vote_share)
+    )
+  ) |>
+  ggplot(aes(x = total_votes, y = candidate, text = hover_text)) +
+  geom_col(fill = "firebrick") +
+  scale_x_continuous(labels = label_comma()) +
+  labs(
+    title = "2026 Florida Republican Primary for Governor",
+    subtitle = "Official precinct-level vote totals across all 67 counties",
+    x = "Total Votes",
+    y = NULL,
+    caption = "Source: Florida Division of Elections"
+  ) +
+  theme_minimal()
+
+ggplotly(bar_plot, tooltip = "text")
+```
+
+```{r}
+# Find the candidate with the most votes in each county
+county_winners <- election_data |>
+  filter(X12 == "Governor", X16 == "REP") |>
+  mutate(
+    county = if_else(X2 == "Desoto", "DeSoto", X2),
+    votes = as.numeric(X19)
+  ) |>
+  summarize(county_votes = sum(votes, na.rm = TRUE), .by = c(county, X15)) |>
+  slice_max(county_votes, n = 1, by = county, with_ties = FALSE) |>
+  rename(winner = X15)
+
+# Load Florida county boundaries and join election winners
+fl_counties <- counties(state = "FL", cb = TRUE, progress_bar = FALSE) |>
+  left_join(county_winners, by = c("NAME" = "county"))
+
+# Plot county map colored by winning candidate
+ggplot(fl_counties, aes(fill = winner)) +
+  geom_sf(color = "white", linewidth = 0.2) +
+  scale_fill_brewer(palette = "Set1", name = "Winning Candidate") +
+  labs(
+    title = "2026 Florida Republican Primary for Governor by County",
+    subtitle = "Candidate winning the most votes in each of Florida's 67 counties",
+    caption = "Source: Florida Division of Elections & U.S. Census Bureau (tigris)"
+  ) +
+  theme_void()
+```
+
